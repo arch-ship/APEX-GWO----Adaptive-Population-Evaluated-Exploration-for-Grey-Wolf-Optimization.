@@ -794,6 +794,7 @@ def _make_beam_stiffness():
     )
 
 
+
 # ---------------------------------------------------------
 # 9. COLUMN BUCKLING CAPACITY
 # ---------------------------------------------------------
@@ -820,4 +821,447 @@ def _make_column_buckling():
     def constraints(x):
         b, h = x
 
-        volume =
+        volume = b * h * length
+
+        g1 = volume / max_volume - 1.0
+
+        # Limit section slenderness ratio.
+        g2 = h / (6.0 * b) - 1.0
+        g3 = b / (6.0 * h) - 1.0
+
+        return [g1, g2, g3]
+
+    def decode(x):
+        b, h = x
+
+        I = min(
+            b * h ** 3 / 12.0,
+            h * b ** 3 / 12.0,
+        )
+
+        return {
+            "type": "engineering",
+            "design": "Column Buckling",
+            "Width": round(float(b), 5),
+            "Height": round(float(h), 5),
+            "Material Volume": round(
+                float(b * h * length), 3
+            ),
+            "Second Moment of Area": round(float(I), 5),
+        }
+
+    return _make_engineering_max_problem(
+        pid="column_buckling",
+        name="Column Buckling Capacity Maximization",
+        dim=2,
+        lb=[5.0, 5.0],
+        ub=[100.0, 100.0],
+        objective=objective,
+        constraints=constraints,
+        description=(
+            "Maximize Euler critical buckling load of a column "
+            "under material-volume and cross-section constraints."
+        ),
+        unit="Critical Load",
+        decoder=decode,
+    )
+
+
+# ---------------------------------------------------------
+# 10. SPRING LOAD CAPACITY
+# ---------------------------------------------------------
+
+def _make_spring_load_capacity():
+
+    G = 79000.0
+    allowable_shear = 600.0
+    max_deflection = 30.0
+
+    def engineering_values(x):
+        d, D, N = x
+
+        C = D / d
+
+        # Wahl correction factor.
+        K = (
+            (4.0 * C - 1.0) / (4.0 * C - 4.0)
+            + 0.615 / C
+        )
+
+        # Allowable load from shear stress.
+        F_stress = (
+            allowable_shear * np.pi * d ** 3
+            / (8.0 * D * K)
+        )
+
+        # Spring stiffness.
+        k = G * d ** 4 / (8.0 * D ** 3 * N)
+
+        # Load allowed by maximum deflection.
+        F_deflection = k * max_deflection
+
+        return F_stress, F_deflection, k, K
+
+    def objective(x):
+        F_stress, F_deflection, _, _ = engineering_values(x)
+
+        return float(min(F_stress, F_deflection))
+
+    def constraints(x):
+        d, D, N = x
+        C = D / d
+
+        F_stress, F_deflection, k, K = engineering_values(x)
+
+        # Keep spring index in a practical range.
+        g1 = 4.0 / C - 1.0
+        g2 = C / 12.0 - 1.0
+
+        # Minimum stiffness.
+        g3 = 10.0 / k - 1.0
+
+        # Limit coil count.
+        g4 = N / 15.0 - 1.0
+
+        return [g1, g2, g3, g4]
+
+    def decode(x):
+        d, D, N = x
+        Fs, Fd, k, K = engineering_values(x)
+
+        return {
+            "type": "engineering",
+            "design": "Spring Load Capacity",
+            "Wire Diameter": round(float(d), 5),
+            "Mean Coil Diameter": round(float(D), 5),
+            "Active Coils": round(float(N), 5),
+            "Spring Stiffness": round(float(k), 5),
+            "Stress Limited Load": round(float(Fs), 5),
+            "Deflection Limited Load": round(float(Fd), 5),
+        }
+
+    return _make_engineering_max_problem(
+        pid="spring_load_capacity",
+        name="Spring Load Capacity Maximization",
+        dim=3,
+        lb=[1.0, 4.0, 2.0],
+        ub=[10.0, 80.0, 15.0],
+        objective=objective,
+        constraints=constraints,
+        description=(
+            "Maximize the allowable axial load of a helical spring "
+            "subject to spring-index, stiffness and coil-count limits."
+        ),
+        unit="Load",
+        decoder=decode,
+    )
+
+
+# ---------------------------------------------------------
+# 11. HEAT EXCHANGER PERFORMANCE
+# ---------------------------------------------------------
+
+def _make_heat_exchanger():
+
+    U = 500.0
+    cp = 4180.0
+    max_pumping = 16.0
+
+    def engineering_values(x):
+        A, m_hot, m_cold = x
+
+        C_hot = m_hot * cp
+        C_cold = m_cold * cp
+
+        C_min = min(C_hot, C_cold)
+        C_max = max(C_hot, C_cold)
+
+        Cr = C_min / C_max
+        NTU = U * A / C_min
+
+        if abs(1.0 - Cr) < 1e-10:
+            effectiveness = NTU / (1.0 + NTU)
+        else:
+            exp_term = np.exp(
+                -NTU * (1.0 - Cr)
+            )
+
+            effectiveness = (
+                1.0 - exp_term
+            ) / (
+                1.0 - Cr * exp_term
+            )
+
+        return effectiveness, C_min, C_max, NTU
+
+    def objective(x):
+        effectiveness, _, _, _ = engineering_values(x)
+        return float(effectiveness)
+
+    def constraints(x):
+        A, m_hot, m_cold = x
+
+        # Pumping-power proxy.
+        pumping = m_hot ** 2 + m_cold ** 2
+
+        g1 = pumping / max_pumping - 1.0
+
+        # Heat exchanger area budget.
+        g2 = A / 50.0 - 1.0
+
+        return [g1, g2]
+
+    def decode(x):
+        A, m_hot, m_cold = x
+
+        eff, Cmin, Cmax, NTU = engineering_values(x)
+
+        return {
+            "type": "engineering",
+            "design": "Heat Exchanger",
+            "Heat Transfer Area": round(float(A), 5),
+            "Hot Fluid Flow Rate": round(float(m_hot), 5),
+            "Cold Fluid Flow Rate": round(float(m_cold), 5),
+            "Effectiveness": round(float(eff), 6),
+            "NTU": round(float(NTU), 6),
+            "Minimum Heat Capacity Rate": round(float(Cmin), 3),
+            "Maximum Heat Capacity Rate": round(float(Cmax), 3),
+        }
+
+    return _make_engineering_max_problem(
+        pid="heat_exchanger",
+        name="Heat Exchanger Effectiveness Maximization",
+        dim=3,
+        lb=[1.0, 0.5, 0.5],
+        ub=[50.0, 4.0, 4.0],
+        objective=objective,
+        constraints=constraints,
+        description=(
+            "Maximize counter-flow heat exchanger effectiveness "
+            "subject to heat-transfer area and pumping-power limits."
+        ),
+        unit="Effectiveness",
+        decoder=decode,
+    )
+
+
+# ---------------------------------------------------------
+# 12. PRESSURE VESSEL SAFE PRESSURE CAPACITY
+# ---------------------------------------------------------
+
+def _make_pressure_vessel_capacity():
+
+    allowable_stress = 150.0
+    max_material_volume = 1.0e6
+
+    def objective(x):
+        Ts, Th, R, L = x
+
+        # Thin-wall cylindrical and spherical-head approximations.
+        shell_pressure = (
+            2.0 * allowable_stress * Ts / R
+        )
+
+        head_pressure = (
+            2.0 * allowable_stress * Th / R
+        )
+
+        return float(min(shell_pressure, head_pressure))
+
+    def constraints(x):
+        Ts, Th, R, L = x
+
+        # Approximate material-volume budget.
+        material_volume = (
+            2.0 * np.pi * R * L * Ts
+            + 4.0 * np.pi * R ** 2 * Th
+        )
+
+        g1 = material_volume / max_material_volume - 1.0
+
+        # Limit vessel length relative to radius.
+        g2 = L / (8.0 * R) - 1.0
+
+        # Ensure positive thickness relative to radius.
+        g3 = 0.1 * R / Ts - 1.0
+        g4 = 0.1 * R / Th - 1.0
+
+        return [g1, g2, g3, g4]
+
+    def decode(x):
+        Ts, Th, R, L = x
+
+        shell_pressure = (
+            2.0 * allowable_stress * Ts / R
+        )
+
+        head_pressure = (
+            2.0 * allowable_stress * Th / R
+        )
+
+        return {
+            "type": "engineering",
+            "design": "Pressure Vessel Capacity",
+            "Shell Thickness": round(float(Ts), 5),
+            "Head Thickness": round(float(Th), 5),
+            "Radius": round(float(R), 5),
+            "Cylinder Length": round(float(L), 5),
+            "Shell Pressure Limit": round(float(shell_pressure), 5),
+            "Head Pressure Limit": round(float(head_pressure), 5),
+        }
+
+    return _make_engineering_max_problem(
+        pid="pressure_vessel_capacity",
+        name="Pressure Vessel Safe Capacity Maximization",
+        dim=4,
+        lb=[2.0, 2.0, 20.0, 20.0],
+        ub=[30.0, 30.0, 100.0, 300.0],
+        objective=objective,
+        constraints=constraints,
+        description=(
+            "Maximize approximate allowable internal pressure "
+            "under a vessel material-volume and geometry budget."
+        ),
+        unit="Pressure",
+        decoder=decode,
+    )
+
+
+# =========================================================
+# BUILD ALL 12 ENGINEERING PROBLEMS
+# =========================================================
+
+def build_problem_suite(seed=2026):
+
+    items = [
+        # Six minimization problems
+        _make_spring(),
+        _make_pressure_vessel(),
+        _make_three_bar_truss(),
+        _make_welded_beam(),
+        _make_speed_reducer(),
+        _make_cantilever_beam(),
+
+        # Six maximization problems
+        _make_truss_load_capacity(),
+        _make_beam_stiffness(),
+        _make_column_buckling(),
+        _make_spring_load_capacity(),
+        _make_heat_exchanger(),
+        _make_pressure_vessel_capacity(),
+    ]
+
+    return {p.id: p for p in items}
+
+
+# =========================================================
+# 2D VISUALIZATION BENCHMARKS
+# =========================================================
+
+def sphere(x: np.ndarray) -> float:
+    return float(np.sum(x ** 2))
+
+
+def rastrigin(x: np.ndarray) -> float:
+    return float(
+        10.0 * len(x)
+        + np.sum(
+            x ** 2
+            - 10.0 * np.cos(2.0 * np.pi * x)
+        )
+    )
+
+
+def ackley(x: np.ndarray) -> float:
+    n = len(x)
+
+    return float(
+        -20.0 * np.exp(
+            -0.2 * np.sqrt(np.sum(x ** 2) / n)
+        )
+        - np.exp(
+            np.sum(np.cos(2.0 * np.pi * x)) / n
+        )
+        + 20.0 + np.e
+    )
+
+
+def rosenbrock(x: np.ndarray) -> float:
+    return float(
+        np.sum(
+            100.0 * (
+                x[1:] - x[:-1] ** 2
+            ) ** 2
+            + (1.0 - x[:-1]) ** 2
+        )
+    )
+
+
+def _make_continuous(
+    pid,
+    name,
+    fn,
+    bound,
+    dim=2,
+    opt_val=0.0,
+):
+    return ProblemSpec(
+        id=pid,
+        name=f"{name} ({dim}D)",
+        category="Continuous",
+        mode="min",
+        dim=dim,
+        lb=np.full(dim, -bound),
+        ub=np.full(dim, bound),
+        obj_func=fn,
+        pop_value_func=lambda x: float(
+            np.sqrt(np.mean((x - opt_val) ** 2))
+        ),
+        description=(
+            f"Minimize {name} benchmark landscape in {dim} dimensions."
+        ),
+        unit="Loss",
+        decode_func=lambda x: {
+            "type": "kv",
+            "Loss": round(float(fn(x)), 6),
+            "L2 Norm": round(float(np.linalg.norm(x)), 4),
+        },
+        optimum_2d=opt_val,
+    )
+
+
+def build_2d_benchmarks() -> Dict[str, ProblemSpec]:
+
+    items = [
+        _make_continuous(
+            "rastrigin_2d",
+            "Rastrigin",
+            rastrigin,
+            5.12,
+            2,
+        ),
+        _make_continuous(
+            "ackley_2d",
+            "Ackley",
+            ackley,
+            8.0,
+            2,
+        ),
+        _make_continuous(
+            "rosenbrock_2d",
+            "Rosenbrock",
+            rosenbrock,
+            3.0,
+            2,
+            1.0,
+        ),
+        _make_continuous(
+            "sphere_2d",
+            "Sphere",
+            sphere,
+            6.0,
+            2,
+        ),
+    ]
+
+    return {p.id: p for p in items}
