@@ -1,24 +1,35 @@
-# Grey Wolf Optimization Lab (Vercel + FastAPI)
+APEX-GWO: Adaptive Population-Evaluated Exploration for Grey Wolf OptimizationAPEX-GWO is a modular Grey Wolf Optimization (GWO) ablation platform and 12-problem benchmarking suite built with FastAPI, NumPy, and a self-contained HTML5 Canvas frontend deployed on Vercel.Standard Grey Wolf Optimization relies on a strictly linear convergence factor ($a(t) = 2(1 - t/(T-1))$) that enforces a fixed 50/50 exploration-exploitation split and selects initial leaders using scalar objective fitness alone. APEX-GWO isolates and evaluates two parameter-free/lightweight improvements through a structured $2 \times 2$ ablation study across 6 maximization and 6 minimization problems.Table of Contents4-Variant Ablation MatrixCore Algorithmic Upgrades12-Problem Benchmark SuiteVerified Benchmark ResultsRepository StructureAPI EndpointsRunning LocallyDeploying on VercelContributors & Course Info4-Variant Ablation MatrixEach variant lives in its own standalone, comment-free Python module under optimizers/ and can be inspected directly from the web dashboard via the Show Code button.CodeAlgorithm NameConvergence Factor a(t)Leader Selection (α,β,δ)ModuleGWO-01Original GWOLinear: $2\left(1 - \frac{t}{T-1}\right)$Fitness Onlyoptimizers/gwo_original.pyGWO-02Non-Linear $a$ GWOCosine: $2\cos\!\left(\frac{\pi}{2}\left(\frac{t}{T-1}\right)^{1.25}\right)$Fitness Onlyoptimizers/gwo_nonlinear_a.pyGWO-03Dual-Criteria GWOLinear: $2\left(1 - \frac{t}{T-1}\right)$Step-1 Top-3 Column Tiers ($t = 0$)optimizers/gwo_dual_criteria.pyGWO-04Combined APEX-GWOCosine: $2\cos\!\left(\frac{\pi}{2}\left(\frac{t}{T-1}\right)^{1.25}\right)$Step-1 Top-3 Column Tiers ($t = 0$)optimizers/gwo_hybrid.pyCore Algorithmic UpgradesNon-Linear Cosine Convergence Factor (GWO-02, GWO-04)$$a(t) = 2\cos\!\left(\frac{\pi}{2}\left(\frac{t}{T - 1}\right)^{1.25}\right)$$Sustains $a(t) > 1.0$ across approximately 70% of the iteration budget for wider global exploration on multimodal landscapes before transitioning sharply into local exploitation during the final 30%.Step-1 Top-3 Tiered Column-Ranking Leader Selection (GWO-03, GWO-04)
+At initialization ($t = 0$), the pack coordinates and objective scores are stacked into an $N \times (D + 1)$ matrix $[x_1, \dots, x_D, f(x)]$. Each column is ranked independently (ascending for minimization, descending for maximization) to tag its 1st (Rank-1), 2nd (Rank-2), and 3rd (Rank-3) best values:$\alpha$ is assigned to the wolf with the highest Rank-1 count.$\beta$ is assigned from the remaining wolves with the highest Rank-2 count.$\delta$ is assigned from the remaining wolves with the highest Rank-3 count.Whole-row integrity is strictly preserved (coordinates are never spliced across wolves), and standard fitness updates take over for $t \ge 1$ to prevent boundary corner drift on non-monotonic interior optima.Fair Tie Exclusion
+Winner evaluation checks rounded scores within a tolerance of $10^{-4}$. Exact ties are never credited to any algorithm's win count; instead, they are counted separately in a Ties (Unassigned) tile and listed explicitly in a dedicated Tied Algorithms column (both in the dashboard and CSV exports).12-Problem Benchmark SuiteAll four variants support minimization and maximization natively via a shared is_better(candidate, reference, mode) comparator and identical seeded initial populations.#ProblemCategoryModeDimEncoding / Constraint Handling10/1 Knapsack (20 Items)CombinatorialMAX20DSigmoid binary transfer; quadratic weight penalty2Traveling Salesman (14 Cities)RoutingMIN14DRandom-Key argsort permutation; closed tour3Max Network Flow (7 Nodes)Graph FlowMAX11DEdge capacity bounds; node flow conservation penalty4Cloud VM Task SchedulingSchedulingMIN20DDiscrete task-to-VM mapping; makespan + energy5Warehouse Bin PackingPackingMIN18DRandom-Key First-Fit bin count + slack ratio6Portfolio Sharpe OptimizationFinanceMAX8DSimplex weights; 45% single-asset concentration cap7Facility Location CoverageLogisticsMAX6DContinuous 2D hub coordinates; 24 km demand radius8Weighted Graph Max-CutGraph PartitionMAX16DSign-threshold binary partition; total cut weight9Hybrid IR Search Rank TunerInfo RetrievalMAX5DBM25 ($k_1, b$) + semantic/trust fusion; 40 ms cap10Rastrigin MultimodalContinuousMIN10DDense cosine local optima trap on $[-5.12, 5.12]^{10}$11Ackley Deep FunnelContinuousMIN10DFlat outer basin + sharp origin funnel on $[-10, 10]^{10}$12Rosenbrock ValleyContinuousMIN10DCurved non-convex valley with optimum at $(1, \dots, 1)$Verified Benchmark ResultsResults below were recorded at the default configuration ($N = 20$, $T = 40$, $\text{seed} = 42$) with strict tie exclusion:AlgorithmOutright WinsAvg Δ vs. OriginalCombined APEX-GWO (GWO-04)5 / 12+13.99%Dual-Criteria GWO (GWO-03)2 / 12—Original GWO (GWO-01)1 / 12BaselineNon-Linear $a$ GWO (GWO-02)0 / 12 (shares 3 ties)+7.37%Ties (Excluded from Wins)4 / 12Knapsack, Bin Packing, Max-Cut, Hybrid IRStatistical Validation (10-Trial Wilcoxon Signed-Rank Test, seeds 42 to 195): On 10D Ackley, Combined APEX-GWO reduces mean error by 95% ($0.2102 \to 0.0105$) and variance by over $70\times$ compared with Original GWO ($p = 0.0020 < 0.01$).Repository Structure.
+├── environments/
+│   ├── __init__.py
+│   └── problem_suite.py          # 12 Min/Max benchmark problems + 2D surfaces
+├── optimizers/
+│   ├── __init__.py               # Algorithm registry (ALGORITHMS, ALGO_ORDER)
+│   ├── common.py                 # RunResult, is_better, pack_diversity, convergence_iteration
+│   ├── gwo_original.py           # GWO-01: Original GWO (Linear a, Fitness Only)
+│   ├── gwo_nonlinear_a.py        # GWO-02: Non-Linear Cosine a GWO
+│   ├── gwo_dual_criteria.py      # GWO-03: Step-1 Top-3 Column-Tier GWO
+│   └── gwo_hybrid.py             # GWO-04: Combined APEX-GWO
+├── index.html                    # Self-contained UI (HTML + CSS + JS + Canvas charts)
+├── main.py                       # FastAPI backend entrypoint & tie-excluded scoring
+├── pyproject.toml                # Python >=3.12 project config + Vercel entrypoint
+├── requirements.txt              # FastAPI, Uvicorn, NumPy
+├── vercel.json                   # Serverless function timeout config (60s)
+├── .gitignore
+└── README.md
+API EndpointsMethodEndpointDescriptionGET/Serves the self-contained web dashboard (index.html)GET/api/healthHealth check returning status, algorithm count, and frontend checkGET/api/metaReturns metadata for all 4 algorithms, 12 problems, and 2D surfacesGET/api/code/{algo_id}Returns the clean Python source code for a single algorithmPOST/api/runRuns all 4 variants on a single problem and returns curves, audit, and decoded solutionPOST/api/suiteExecutes the full 12-problem benchmark suite with tie-excluded scoreboardPOST/api/arena2dComputes 2D surface grid and per-iteration trajectories for the live 2D Swarm ViewRunning LocallyPrerequisitesPython 3.12+Setup & Launch# 1. Clone the repository
+git clone https://github.com/arch-ship/APEX-GWO----Adaptive-Population-Evaluated-Exploration-for-Grey-Wolf-Optimization..git
+cd APEX-GWO----Adaptive-Population-Evaluated-Exploration-for-Grey-Wolf-Optimization.
 
-A clean, modular web application comparing **4 Grey Wolf Optimization (GWO) variants** across **12 real-world & combinatorial optimization problems** (6 Maximization + 6 Minimization), deployed on **Vercel** with a lightweight FastAPI + NumPy backend and vanilla HTML/CSS/Canvas frontend.
+# 2. (Optional) Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-## The 4 GWO Algorithms
-1. **Original GWO** (`optimizers/gwo_original.py`) — Standard linear convergence factor `a(t) = 2(1 - t/T)` and fitness-only Alpha/Beta/Delta selection.
-2. **Non-Linear a GWO** (`optimizers/gwo_nonlinear_a.py`) — Replaces linear `a` with non-linear cosine decay `a(t) = 2 cos((pi/2)(t/T)^1.25)` while keeping fitness-only leaders.
-3. **Dual-Criteria GWO** (`optimizers/gwo_dual_criteria.py`) — Keeps linear `a(t)`, but inspects the initial population (Min/Max aware) and selects Alpha/Beta/Delta using combined Population Value + Fitness ranking.
-4. **Combined GWO** (`optimizers/gwo_hybrid.py`) — Combines both the non-linear adaptive convergence factor `a(t)` and the dual-criteria Population + Fitness leader selection.
-
-## Local Development
-```bash
+# 3. Install dependencies
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-Open `http://localhost:8000`.
 
-## Deploy to Vercel
-1. Push this folder to a GitHub repository.
-2. Import the repository in the Vercel Dashboard (Vercel auto-detects `main.py` as FastAPI and serves `public/` via CDN).
-3. Or deploy via CLI:
-```bash
-vercel --prod
-```
+# 4. Start the FastAPI server
+uvicorn main:app --reload --port 8000
+Open http://localhost:8000 in your browser (or verify http://localhost:8000/api/health).Deploying on VercelThis repository is pre-configured for zero-config FastAPI deployment on Vercel via pyproject.toml (entrypoint = "main:app") and vercel.json.Import the GitHub repository into Vercel.In Project Settings -> Build and Deployment:Framework Preset: FastAPIRoot Directory: leave blank (repository root)Build Command / Output Directory overrides: leave OFFDeploy and verify https://<your-vercel-domain>/api/health returns:{"status": "ok", "algorithms": 4, "index_found": true}
+Contributors & Course InfoInstitution: Jaypee Institute of Information Technology (JIIT), Sector 62, NoidaCourse: Introduction to Meta Heuristic Optimization (Project-Based Learning)Authors: Aditya Garg (23517020), Ayaz Wasee Al Ansari (23517033) — BCA (HR)Faculty Guide: Dr. Parul Agarwal
